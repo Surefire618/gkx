@@ -85,6 +85,7 @@ def gk(file, fc_file, outfile, outfolder, maxsteps, offset, interpolate, spacing
         dataset = dataset.isel(time=slice(0, len(dataset.time), spacing))
 
     if fc_file is not None and interpolate:
+        from gkx.utils.greenkubo import get_kappa_interpolate
         ds_gk = get_kappa_interpolate(
             dataset,
             fc_file,
@@ -103,54 +104,3 @@ def gk(file, fc_file, outfile, outfolder, maxsteps, offset, interpolate, spacing
 
     reporter.done()
 
-def get_kappa_interpolate(
-    dataset,
-    fc_file,
-):
-    from vibes.green_kubo import get_gk_dataset
-    from vibes.io import parse_force_constants
-    from vibes.force_constants import ForceConstants
-    from vibes import dimensions as dims
-    from ase import Atoms
-    from ase.geometry import find_mic
-
-    dataset[keys.heat_flux] /= 1000
-    # dataset[keys.heat_flux_aux] /= 1000
-
-    primitive = Atoms(**json.loads(dataset.attrs[keys.reference_primitive]))
-    supercell = Atoms(**json.loads(dataset.attrs[keys.reference_supercell]))
-
-    cell = np.asarray(supercell.cell)
-    shape = dataset[keys.positions].shape
-
-    displacements = dataset[keys.positions].data - supercell.positions
-    displacements = find_mic(displacements.reshape(-1, 3), cell)[0]
-    displacements = displacements.reshape(*shape)
-
-    volumes = np.ones(shape[0]) * dataset.volume
-
-    dataset.update({
-        keys.displacements: (dims.time_atom_vec, displacements),
-        keys.volume: (dims.time, volumes),
-    })
-
-    if fc_file:
-        fc = parse_force_constants(fc_file, two_dim=False)
-        fcs = ForceConstants(
-            force_constants=fc, primitive=primitive, supercell=supercell
-        )
-
-        fc = fcs.array
-        dataset.update({keys.fc: (dims.fc, fc)})
-        rfc = fcs.remapped
-        dataset.update({keys.fc_remapped: (dims.fc_remapped, rfc)})
-        map_s2p = fcs.I2iL_map[:, 0]
-        dataset.attrs.update({keys.map_supercell_to_primitive: map_s2p})
-
-    ds_gk = get_gk_dataset(
-        dataset,
-        interpolate=True,
-        quasi_harmonic_greenkubo=True,
-    )
-
-    return ds_gk
