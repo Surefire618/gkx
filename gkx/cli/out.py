@@ -1,15 +1,12 @@
 import click
 from pathlib import Path
 import xarray as xr
-import json
-import numpy as np
 
 # if this is smaller than the number of files,
 # we get extremely verbose (but ultimately harmless)
 # warnings, see https://github.com/pydata/xarray/issues/7549
 xr.set_options(file_cache_maxsize=512)
 
-from vibes import keys
 
 @click.group()
 def out():
@@ -56,6 +53,9 @@ def gk(file, fc_file, outfile, outfolder, maxsteps, offset, interpolate, spacing
 
     if freq is not None:
         outfile = outfile.parent / f"{outfile.stem}.freq_{freq:.2f}.nc"
+
+    if interpolate:
+        outfile = outfile.parent / f"{outfile.stem}.interpolate.nc"
 
     if outfile.is_file():
         comms.warn(f"{outfile} exists, skipping")
