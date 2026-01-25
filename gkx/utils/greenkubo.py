@@ -14,7 +14,6 @@ from ase.geometry import find_mic
 from ase import units
 
 from vibes.io import parse_force_constants
-from vibes.force_constants import ForceConstants
 from vibes.dynamical_matrix import DynamicalMatrix
 from vibes import dimensions as dims
 from vibes import keys, defaults
@@ -83,26 +82,14 @@ def get_kappa_interpolate(
 
         fc = parse_force_constants(str(fc_path), two_dim=False)
 
-        fcs = ForceConstants(
-            force_constants=fc,
+        dmx = DynamicalMatrix(
+            force_constants=np.asarray(fc),
             primitive=primitive,
             supercell=supercell,
+            with_group_velocity_matrices=True,   # QHGK needs it
         )
 
-        fc_arr = np.asarray(fcs.array)
-        dataset.update({keys.fc: (dims.fc, fc_arr)})
-
-        rfc = np.asarray(fcs.remapped)
-        dataset.update({keys.fc_remapped: (dims.fc_remapped, rfc)})
-
-        map_s2p = np.asarray(fcs.I2iL_map[:, 0])
-        dataset.attrs.update({keys.map_supercell_to_primitive: map_s2p})
-
-        # QHGK needs generalized group velocity matrices
-        dmx = DynamicalMatrix.from_dataset(dataset, with_group_velocity_matrices=True)
-
-        # optional cache save
-        if (dmx is not None) and (dmx_path is not None):
+        if dmx_path is not None:
             _talk(f"Save DynamicalMatrix to {dmx_path}")
             dmx.to_hdf5(
                 str(dmx_path),
@@ -114,6 +101,14 @@ def get_kappa_interpolate(
 
     else:
         dmx = None
+
+    if dmx is not None:
+        dataset.update({keys.fc: (dims.fc, np.asarray(dmx.fc_phonopy))})
+
+        dataset.update({keys.fc_remapped: (dims.fc_remapped, np.asarray(dmx.remapped))})
+
+        map_s2p = np.asarray(dmx.I2iL_map[:, 0])
+        dataset.attrs.update({keys.map_supercell_to_primitive: map_s2p})
 
     ds_gk = get_gk_dataset(
         dataset,
