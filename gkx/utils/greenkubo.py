@@ -1,5 +1,7 @@
 import json
 import os
+from pathlib import Path
+from typing import Optional
 import numpy as np
 import xarray as xr
 import collections
@@ -42,7 +44,8 @@ def _talk(msg, **kw):
 
 def get_kappa_interpolate(
     dataset,
-    fc_file,
+    fc_file: Optional[Path] = None,
+    dmx_file: Optional[Path] = None,
 ):
 
     dataset[keys.heat_flux] /= 1000
@@ -65,33 +68,66 @@ def get_kappa_interpolate(
         keys.volume: (dims.time, volumes),
     })
 
-    if fc_file:
-        fc = parse_force_constants(fc_file, two_dim=False)
+    dmx_path = Path(dmx_file) if dmx_file is not None else None
+    fc_path  = Path(fc_file)  if fc_file  is not None else None
+    dmx = None
+
+    if dmx_path is not None and dmx_path.exists():
+        _talk(f"Load DynamicalMatrix from {dmx_path}")
+        dmx = DynamicalMatrix.from_hdf5(str(dmx_path))
+        dataset.update({keys.fc: (dims.fc, np.asarray(dmx.fc_phonopy))})
+
+    elif fc_path is not None and fc_path.exists():
+        msg = "Set up DynamicalMatrix"
+        timer = Timer(msg)
+
+        fc = parse_force_constants(str(fc_path), two_dim=False)
+
         fcs = ForceConstants(
-            force_constants=fc, primitive=primitive, supercell=supercell
+            force_constants=fc,
+            primitive=primitive,
+            supercell=supercell,
         )
 
-        fc = fcs.array
-        dataset.update({keys.fc: (dims.fc, fc)})
-        rfc = fcs.remapped
+        fc_arr = np.asarray(fcs.array)
+        dataset.update({keys.fc: (dims.fc, fc_arr)})
+
+        rfc = np.asarray(fcs.remapped)
         dataset.update({keys.fc_remapped: (dims.fc_remapped, rfc)})
-        map_s2p = fcs.I2iL_map[:, 0]
+
+        map_s2p = np.asarray(fcs.I2iL_map[:, 0])
         dataset.attrs.update({keys.map_supercell_to_primitive: map_s2p})
+
+        # QHGK needs generalized group velocity matrices
+        dmx = DynamicalMatrix.from_dataset(dataset, with_group_velocity_matrices=True)
+
+        # optional cache save
+        if (dmx is not None) and (dmx_path is not None):
+            _talk(f"Save DynamicalMatrix to {dmx_path}")
+            dmx.to_hdf5(
+                str(dmx_path),
+                include_D_qij=True,
+                include_group_velocity_matrices=True,
+            )
+
+        timer(msg)
+
+    else:
+        dmx = None
 
     ds_gk = get_gk_dataset(
         dataset,
+        dmx=dmx,
         interpolate=True,
         quasi_harmonic_greenkubo=True,
     )
 
     return ds_gk
 
-
 def get_gk_dataset(
     dataset: xr.Dataset,
+    dmx: DynamicalMatrix = None,
     interpolate: bool = False,
-    harmonic_crosscorrelation: bool = False,
-    greenkubo_mode_analysis: bool = False,
     quasi_harmonic_greenkubo: bool = False,
     window_factor: int = defaults.window_factor,
     filter_prominence: float = defaults.filter_prominence,
@@ -223,10 +259,11 @@ def get_gk_dataset(
     }
 
     # 7. add properties derived from harmonic model
-    if keys.fc in dataset:
+    if dmx is not None:
 
         data_ha = get_gk_interpolate(
             dataset,
+            dmx=dmx,
             interpolate=interpolate,
             quasi_harmonic_greenkubo=quasi_harmonic_greenkubo,
         )
@@ -437,18 +474,31 @@ def get_gk_interpolate(
     interpolate: bool = False,
     quasi_harmonic_greenkubo: bool = False,
 ):
+    timer = Timer("Set up DynamicalMatrix")
 
-    if quasi_harmonic_greenkubo:
-        dmx = DynamicalMatrix.from_dataset(dataset, with_group_velocity_matrices=True)
+    need_vssq = bool(quasi_harmonic_greenkubo)
+    have_dmx = dmx is not None
+
+    if have_dmx:
+        sol = getattr(dmx, "solution", None)
+        have_sol = sol is not None
+        have_vssq = have_sol and (getattr(sol, "v_ssqa_cartesian", None) is not None)
+
+        if need_vssq and (not have_vssq):
+            dmx = DynamicalMatrix.from_dataset(dataset, with_group_velocity_matrices=True)
     else:
-        if dmx is None:
-            dmx = DynamicalMatrix.from_dataset(dataset)
+        dmx = DynamicalMatrix.from_dataset(
+            dataset,
+            with_group_velocity_matrices=need_vssq,
+        )
+
+    timer("Set up DynamicalMatrix")
 
     # heat capacity and phonon lifetime
     # cv_sq, tau_sq = get_flux_mode_data(dataset=dataset, dmx=dmx)
     timer = Timer(f"Compute_cv_tau using {n_threads} threads")
     cv_sq, tau_sq = compute_cv_tau(dataset=dataset, dmx=dmx, fft_workers=n_threads)
-    timer()
+    timer("Compute_cv_tau with time")
 
     # symmetrize by averaging over symmetry-related q-points
     map2ir, map2full = dmx.q_grid.map2ir, dmx.q_grid.ir.map2full

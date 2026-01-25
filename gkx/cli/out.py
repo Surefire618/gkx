@@ -16,6 +16,7 @@ def out():
 @out.command()
 @click.argument("file", default=Path("trajectory/"), type=Path)
 @click.option("-fc", "--fc_file", default=None, type=Path)
+@click.option("-dmx", "--dmx_file", default=None, type=Path)
 @click.option("-o", "--outfile", default="greenkubo.nc", type=Path)
 @click.option("--outfolder", default=Path("."), type=Path)
 @click.option(
@@ -25,7 +26,7 @@ def out():
 @click.option("--interpolate", is_flag=True, help="interpolate to dense grid")
 @click.option("--spacing", default=None, type=int, help="use only every nth step")
 @click.option("--freq", default=1.0, type=float, help="lowest characteristic frequency")
-def gk(file, fc_file, outfile, outfolder, maxsteps, offset, interpolate, spacing, freq):
+def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolate, spacing, freq):
     """perform greenkubo analysis for heat flux dataset in FILE"""
     from stepson import comms
     from stepson.green_kubo import get_kappa_dataset
@@ -84,11 +85,12 @@ def gk(file, fc_file, outfile, outfolder, maxsteps, offset, interpolate, spacing
         comms.talk(f"using spacing {spacing}")
         dataset = dataset.isel(time=slice(0, len(dataset.time), spacing))
 
-    if fc_file is not None and interpolate:
+    if fc_file is not None or dmx_file is not None and interpolate:
         from gkx.utils.greenkubo import get_kappa_interpolate
         ds_gk = get_kappa_interpolate(
             dataset,
             fc_file,
+            dmx_file,
         )
     else:
         ds_gk = get_kappa_dataset(
