@@ -2,6 +2,9 @@ import json
 import numpy as np
 import xarray as xr
 import collections
+import scipy.signal as sl
+from scipy.fft import fft, ifft, next_fast_len
+import scipy.optimize as so
 
 from ase import Atoms
 from ase.geometry import find_mic
@@ -13,8 +16,7 @@ from vibes.dynamical_matrix import DynamicalMatrix
 from vibes import dimensions as dims
 from vibes import keys, defaults
 from vibes.brillouin import get_symmetrized_array
-from vibes.correlation import get_autocorrelationNd
-from vibes.helpers import talk, warn
+from vibes.helpers import talk, warn, Timer
 from vibes.green_kubo import (
     get_gk_dataset,
     get_gk_prefactor_from_dataset,
@@ -295,13 +297,136 @@ def get_flux_mode_data(
     # compute <a^+(t) a(0)>
     a_std_sq = a_tsq.data.std(axis=0)
     a_tsq /= a_std_sq[None,:,:]
-    g_tsq = get_autocorrelationNd(a_tsq, off_diagonal=False)
+    g_tsq = get_autocorrelation_diagonal(a_tsq)
     g2_tsq = (g_tsq * g_tsq.conj())
 
     # get lifetimes from fitting exp. function to mode amplitude
     tau_sq = get_lifetimes(g2_tsq.rename({keys.time_GKMA: keys.time}))
 
+    # filter zero frequency lifetime
+    tau_sq *= np.where(dmx.w_sq < 1.0e-6, np.nan, 1)
+
     return cv_sq, tau_sq
+
+def get_a_tsq(
+    U_tIa: np.ndarray,
+    V_tIa: np.ndarray,
+    masses: np.ndarray,
+    e_sqI: np.ndarray,
+    w_inv_sq: np.ndarray,
+    stride: int = 1,
+) -> np.ndarray:
+    """get mode amplitude in shape [Nt, Ns, Nq]
+
+    Formulation:
+        a_tsq = 1/2 * (u_tsq + 1/iw_sq p_tsq)
+
+    Args:
+        U_tIa:    displacements as [time, atom_index, cartesian_index]
+        V_tIa:    velocities    as [time, atom_index, cartesian_index]
+        masses:   atomic masses as [atom_index]
+        e_sqI: mode eigenvector as [band_index, q_point_index, atom_and_cartesian_index]
+        w_inv_sq: inverse frequencies as [band_index, q_point_index]
+        stride: use every STRIDE timesteps
+
+    Returns:
+        a_tsq: time resolved mode amplitudes
+
+    """
+    Nt = len(U_tIa[::stride])  # no. of timesteps
+    # mass-weighted coordinates
+    u_tI = np.asarray(masses[None, :, None] ** 0.5 * U_tIa[::stride]).reshape([Nt, -1])
+    p_tI = np.asarray(masses[None, :, None] ** 0.5 * V_tIa[::stride]).reshape([Nt, -1])
+
+    # project on modes
+    u_tsq = np.moveaxis(e_sqI @ u_tI.T, -1, 0)
+    p_tsq = np.moveaxis(e_sqI @ p_tI.T, -1, 0)
+
+    # complex amplitudes
+    a_tsq = 0.5 * (u_tsq + 1.0j * w_inv_sq[None, :] * p_tsq)
+
+    return a_tsq
+
+def get_autocorrelation_diagonal(
+    array: xr.DataArray,
+    verbose: bool = True,
+    **kwargs
+) -> xr.DataArray:
+    """compute autocorrelation function for each componetn in  multi-dimensional xarray
+
+    Args:
+        array [N_t, *dims]: data with time axis in the front
+    Returns:
+        xarray.DataArray [N_t, dims]: autocorrelation along axis=0
+
+    """
+    msg = f"Get autocorrelation for array of shape {array.shape}"
+    timer = Timer(msg, verbose=verbose)
+
+    # memorize dimensions and shape of input array
+    Nt, *shape = np.shape(array)
+
+    # compute autocorrelation for each dimension
+    # move time axis to last index
+    data = np.moveaxis(np.asarray(array), 0, -1)
+    corr = np.zeros((*shape, Nt), dtype=data.dtype)
+    for Ia in np.ndindex(*shape):
+        tmp = correlate(data[Ia], data[Ia], **kwargs)
+        corr[Ia] = tmp
+    # move time axis back to front
+    corr = np.moveaxis(corr, -1, 0)
+
+    da_corr = array.copy()
+    da_corr.data = corr
+    da_corr.name = f"{array.name}_{keys.autocorrelation}"
+
+    timer()
+
+    return da_corr
+
+def correlate(f1, f2, normalize=2, hann=True):
+    """Compute correlation function for signal f1 and signal f2
+
+    Reference:
+        https://gitlab.com/flokno/python_recipes/-/blob/master/mathematics/
+        correlation_function/autocorrelation.ipynb
+
+    Args:
+        f1: signal 1
+        f2: signal 2
+        normalize: no (0), by length (1), by lag (2)
+        hann: apply Hann window
+    Returns:
+        the correlation function
+    """
+    a1, a2 = (np.asarray(f) for f in (f1, f2))
+    Nt = min(len(a1), len(a2))
+
+    if Nt != max(len(a1), len(a2)):
+        msg = "The two signals are not equally long: "
+        msg += f"len(a1), len(a2) = {len(a1)}, {len(a2)}"
+        warn(msg)
+
+    corr = sl.correlate(a1[:Nt], a2[:Nt])[Nt - 1 :]
+
+    if normalize is True or normalize == 1:
+        corr /= Nt
+    elif normalize == 2:
+        corr /= np.arange(Nt, 0, -1)
+
+    if hann:
+        corr *= _hann(Nt)
+
+    return corr
+
+def _hann(nsamples: int):
+    """Return one-side Hann function
+
+    Args:
+        nsamples (int): number of samples
+    """
+    return sl.windows.hann(2 * nsamples)[nsamples:]
+
 
 def get_gk_interpolate(
     dataset: xr.Dataset,
@@ -317,7 +442,8 @@ def get_gk_interpolate(
             dmx = DynamicalMatrix.from_dataset(dataset)
 
     # heat capacity and phonon lifetime
-    cv_sq, tau_sq = get_flux_mode_data(dataset=dataset, dmx=dmx)
+    # cv_sq, tau_sq = get_flux_mode_data(dataset=dataset, dmx=dmx)
+    cv_sq, tau_sq = compute_cv_tau(dataset=dataset, dmx=dmx)
 
     # symmetrize by averaging over symmetry-related q-points
     map2ir, map2full = dmx.q_grid.map2ir, dmx.q_grid.ir.map2full
@@ -362,3 +488,275 @@ def get_gk_interpolate(
         data.update(results)
 
     return collections.namedtuple("gk_ha_q_data", data.keys())(**data)
+
+def compute_cv_tau(
+    dataset,
+    dmx,
+    stride: int = 1,
+    t_chunk: int = 2000,
+    mode_block: int = 64,
+    dtype_u: np.dtype = np.float32,
+    dtype_a: np.dtype = np.complex64,
+    tau_thresh: float = 0.1,
+    hann: bool = True,
+    normalize: int = 2,
+    correct_finite_time: bool = True,
+    fft_workers = None,
+):
+    """
+    In-memory computation of:
+      - cv_sq from Var(E) without storing E_tsq
+      - tau_sq from g2(t)=|<a*(0)a(t)>|^2 via FFT ACF + log-linear fit
+    No disk IO. No (Nt×Nmodes) arrays.
+
+    Assumes:
+      e_sqI shape = (s, q, I), I = 3*Natoms
+      w_inv_sq, w2_sq shape = (s, q)
+    """
+
+    # ---------------- sizes & flatten ----------------
+    # time length after stride
+    Nt = dataset.displacements.isel({dataset.displacements.dims[0]: slice(None, None, stride)}).shape[0]
+    dt = float(dataset.displacements.time[1] - dataset.displacements.time[0])
+
+    e_sqI = np.asarray(dmx.e_sqI)  # (s,q,I)
+    s, q, I = e_sqI.shape
+    nmodes = s * q
+
+    e_mI = e_sqI.reshape(nmodes, I).astype(dtype_a, copy=False)       # (mode, I)
+    w_inv_m = np.asarray(dmx.w_inv_sq).reshape(nmodes).astype(np.float32, copy=False)
+    w2_m = np.asarray(dmx.w2_sq).reshape(nmodes).astype(np.float32, copy=False)
+
+    # ---------------- build mass-weighted u_I(t), p_I(t) once ----------------
+    m = np.asarray(dataset.masses).astype(dtype_u, copy=False)              # (Natoms,)
+    m_sqrt = np.sqrt(m).astype(dtype_u, copy=False)                         # (Natoms,)
+
+    u_I_t = np.empty((I, Nt), dtype=dtype_u)  # (I, Nt)
+    p_I_t = np.empty((I, Nt), dtype=dtype_u)
+
+    # infer time dim name from dataset
+    time_dim = dataset.displacements.dims[0]
+
+    col = 0
+    for raw0 in range(0, Nt, t_chunk):
+        raw1 = min(Nt, raw0 + t_chunk)
+        # map to original indices with stride
+        src0 = raw0 * stride
+        src1 = raw1 * stride
+
+        U = np.asarray(dataset.displacements.isel({time_dim: slice(src0, src1, stride)}).data, dtype=dtype_u)
+        V = np.asarray(dataset.velocities.isel({time_dim: slice(src0, src1, stride)}).data, dtype=dtype_u)
+        tc = U.shape[0]
+
+        # mass weight and flatten: (tc, Natoms, 3) -> (tc, I)
+        # avoid creating gigantic temporaries; tc is small
+        Uw = (U * m_sqrt[None, :, None]).reshape(tc, I)
+        Vw = (V * m_sqrt[None, :, None]).reshape(tc, I)
+
+        u_I_t[:, raw0:raw1] = Uw.T
+        p_I_t[:, raw0:raw1] = Vw.T
+
+        col += tc
+
+    # ---------------- precompute normalization/window for ACF ----------------
+    # autocorr length we compute (full Nt lags)
+    nfft = next_fast_len(2 * Nt)
+    if normalize == 2:
+        norm = np.arange(Nt, 0, -1, dtype=np.float64)  # (Nt,)
+    elif normalize is True or normalize == 1:
+        norm = float(Nt)
+    else:
+        norm = None
+
+    if hann:
+        hann_vec = sl.windows.hann(2 * Nt)[Nt:].astype(np.float64)  # (Nt,)
+
+    Tmax = (Nt - 1) * dt  # for finite-time correction
+
+    # outputs in flattened mode axis
+    cv_mode = np.empty(nmodes, dtype=np.float64)
+    tau_mode = np.full(nmodes, np.nan, dtype=np.float64)
+
+    # ---------------- process by mode blocks ----------------
+    x_full = np.arange(Nt, dtype=np.float64)
+
+    for m0 in range(0, nmodes, mode_block):
+        m1 = min(nmodes, m0 + mode_block)
+        B = m1 - m0
+
+        e_blk = np.ascontiguousarray(e_mI[m0:m1, :])                 # (B, I), complex64
+        w_inv_blk = w_inv_m[m0:m1].astype(np.float32, copy=False)    # (B,)
+        w2_blk = w2_m[m0:m1].astype(np.float32, copy=False)          # (B,)
+
+        # projections: (B,I) @ (I,Nt) -> (B,Nt)
+        u_proj = e_blk @ u_I_t    # complex
+        p_proj = e_blk @ p_I_t    # complex
+
+        # a_blk in-place into u_proj to save memory:
+        # a = 0.5 * (u + 1j*w_inv*p)
+        p_proj *= (1.0j * w_inv_blk[:, None])
+        u_proj += p_proj
+        u_proj *= 0.5
+        a_blk = u_proj  # (B,Nt) complex
+        del p_proj, u_proj
+
+        # -------- std(a) using Var = E(|a|^2) - |E(a)|^2 (no big temporaries) --------
+        mean_a = a_blk.mean(axis=1)  # (B,)
+        abs2 = (a_blk.real.astype(np.float32)**2 + a_blk.imag.astype(np.float32)**2)  # (B,Nt) float32
+        mean_abs2 = abs2.mean(axis=1).astype(np.float64)  # (B,)
+        mean_a_abs2 = (mean_a.real.astype(np.float64)**2 + mean_a.imag.astype(np.float64)**2)
+        var_a = np.maximum(mean_abs2 - mean_a_abs2, 0.0)
+        std_a = np.sqrt(var_a)  # (B,)
+
+        # guard against tiny std_a
+        std_min = 1e-8
+        ok = std_a > std_min
+        if not np.all(ok):
+            # keep those modes as nan in tau; cv still computable but likely 0
+            std_a = np.where(ok, std_a, 1.0)
+
+        # -------- cv from Var(E) without building E --------
+        # E = 2*w2*|a|^2
+        # Var(E) = (2*w2)^2 * (E[|a|^4] - (E[|a|^2])^2)
+        m1_abs2 = mean_abs2  # E[|a|^2]
+        m2_abs2 = (abs2 * abs2).mean(axis=1).astype(np.float64)  # E[|a|^4]
+        scale = (2.0 * w2_blk.astype(np.float64))               # (B,)
+        var_E = (scale * scale) * (m2_abs2 - m1_abs2 * m1_abs2)
+        # will divide by kB T^2 V outside after all blocks (need volume, temperature)
+
+        cv_mode[m0:m1] = var_E
+
+        # -------- normalize a for autocorr (match your a_tsq /= std) --------
+        a_blk = (a_blk / std_a[:, None]).astype(dtype_a, copy=False)
+
+        # -------- ACF via FFT: C = ifft(fft(a)*conj(fft(a)))[:Nt] --------
+        F = fft(a_blk, n=nfft, axis=1, workers=fft_workers)
+        S = F * np.conj(F)
+        C = ifft(S, axis=1, workers=fft_workers)[:, :Nt]  # (B,Nt)
+        del F, S
+
+        # normalization + hann (match your correlate())
+        if norm is not None:
+            if normalize == 2:
+                C = C / norm[None, :]
+            else:
+                C = C / norm
+        if hann:
+            C = C * hann_vec[None, :]
+
+        g2 = (C.real.astype(np.float64)**2 + C.imag.astype(np.float64)**2)  # (B,Nt), real
+        del C
+
+        # -------- lifetime fit (log-linear), mimic your threshold logic --------
+        for i in range(B):
+            tau_mode[m0 + i] = fit_tau_curvefit_from_g2(g2[i], dt=dt, thresh=0.1)
+            # tau_mode[m0 + i] = fit_tau_loglin_weighted(g2[i], dt)
+
+    # ---------------- finalize cv with kB, T, V ----------------
+    volume = float(np.asarray(dataset.volume).mean())
+    temperature = float(np.asarray(dataset.temperature).mean())
+    cv_mode = cv_mode / units.kB / (temperature**2) / volume
+
+    if correct_finite_time:
+        tau_mode = np.asarray(tau_mode, dtype=np.float64)
+        good = np.isfinite(tau_mode) & (tau_mode > 0)
+        tau_mode_corr = np.full_like(tau_mode, np.nan)
+        tau_mode_corr[good] = 1.0 / (1.0 / tau_mode[good] - 1.0 / Tmax)
+        tau_mode = tau_mode_corr
+
+    # reshape back to (s,q)
+    cv_sq = cv_mode.reshape(s, q)
+    tau_sq = tau_mode.reshape(s, q)
+
+    # filter zero frequency lifetime
+    tau_sq *= np.where(dmx.w_sq < 1.0e-6, np.nan, 1)
+
+    # convert to xd.DataArray
+    sq = (dims.s, dims.q)
+    cv_sq = xr.DataArray(cv_sq, dims=sq, name=keys.mode_heat_capacity)
+    tau_sq = xr.DataArray(tau_sq, dims=sq, name=keys.mode_lifetime)
+    return cv_sq, tau_sq
+
+def _exp(x, tau, y0):
+    return y0 * np.exp(-x / tau)
+
+def fit_tau_curvefit_from_g2(g2_1d, dt, thresh=0.1, maxfev=2000):
+    """
+    g2_1d: shape (Nt,), real
+    Returns tau in time unit (tau_index * dt)
+    Implements your original logic:
+      - find first index where corr < 0.1
+      - fit [0:first_drop) with y0*exp(-x/tau)
+    """
+    y = np.asarray(g2_1d, dtype=np.float64)
+    if not np.isfinite(y[0]) or y[0] < 1e-12:
+        return np.nan
+
+    idx = np.where(y < thresh)[0]
+    if idx.size == 0 or idx.min() < 2:
+        return np.nan
+
+    first_drop = int(idx.min())
+    x = np.arange(first_drop, dtype=np.float64)
+    yy = y[:first_drop]
+
+    yy_clip = np.clip(yy, 1e-300, None)
+    slope = np.polyfit(x, np.log(yy_clip), 1)[0]
+    tau0 = (-1.0 / slope) if slope < 0 else max(2.0, first_drop / 5.0)
+    y00 = float(yy[0])
+
+    try:
+        (tau_hat, y0_hat), _ = so.curve_fit(
+            _exp,
+            x, yy,
+            p0=(tau0, y00),
+            bounds=([1e-12, 1e-300], [np.inf, np.inf]),
+            maxfev=maxfev,
+        )
+        return float(tau_hat) * float(dt)
+    except Exception:
+        return np.nan
+
+def fit_tau_loglin_weighted(y, dt, drop_thresh=0.1, fit_floor=0.3):
+    """
+    y: g2(t) 1d array
+    dt: timestep (already includes stride)
+    drop_thresh: define first_drop where y < drop_thresh
+    fit_floor: only fit points with y >= fit_floor to reduce tail influence
+    """
+    y = np.asarray(y, dtype=np.float64)
+    if not np.isfinite(y[0]) or y[0] < 1e-12:
+        return np.nan
+
+    idx = np.where(y < drop_thresh)[0]
+    if idx.size == 0 or idx.min() < 2:
+        return np.nan
+    n = int(idx.min())
+
+    x = np.arange(n, dtype=np.float64)
+    yy = y[:n]
+    m = yy >= fit_floor
+    if m.sum() < 3:
+        # fallback: if too few points above fit_floor, use all up to first_drop
+        m = np.ones_like(yy, dtype=bool)
+
+    xx = x[m]
+    yyy = np.clip(yy[m], 1e-300, None)
+    ly = np.log(yyy)
+
+    # weights: emphasize large y, suppress tail
+    w = yyy * yyy
+    W = w.sum()
+    xbar = (w * xx).sum() / W
+    ybar = (w * ly).sum() / W
+    denom = (w * (xx - xbar) ** 2).sum()
+    if denom == 0:
+        return np.nan
+
+    slope = (w * (xx - xbar) * (ly - ybar)).sum() / denom
+    if slope >= 0:
+        return np.nan
+
+    return (-1.0 / slope) * float(dt)
+
+
