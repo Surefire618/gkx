@@ -1,4 +1,5 @@
 import json
+import os
 import numpy as np
 import xarray as xr
 import collections
@@ -32,6 +33,8 @@ from vibes.green_kubo.harmonic import (
 from vibes.green_kubo.interpolation import get_interpolation_data
 
 _prefix = "gk.interpolation"
+
+n_threads = int(os.environ.get("OPENBLAS_NUM_THREADS", "1"))
 
 def _talk(msg, **kw):
     """wrapper for `utils.talk` with prefix"""
@@ -443,7 +446,9 @@ def get_gk_interpolate(
 
     # heat capacity and phonon lifetime
     # cv_sq, tau_sq = get_flux_mode_data(dataset=dataset, dmx=dmx)
-    cv_sq, tau_sq = compute_cv_tau(dataset=dataset, dmx=dmx)
+    timer = Timer(f"Compute_cv_tau using {n_threads} threads")
+    cv_sq, tau_sq = compute_cv_tau(dataset=dataset, dmx=dmx, fft_workers=n_threads)
+    timer()
 
     # symmetrize by averaging over symmetry-related q-points
     map2ir, map2full = dmx.q_grid.map2ir, dmx.q_grid.ir.map2full
