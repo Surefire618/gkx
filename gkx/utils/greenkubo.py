@@ -699,7 +699,7 @@ def compute_cv_tau(
 
         # -------- lifetime fit (log-linear), mimic your threshold logic --------
         for i in range(B):
-            tau_mode[m0 + i] = fit_tau_curvefit_from_g2(g2[i], dt=dt, thresh=0.1)
+            tau_mode[m0 + i] = fit_tau_curvefit_from_g2(g2[i], dt=dt, thresh=0.5)
             # tau_mode[m0 + i] = fit_tau_loglin_weighted(g2[i], dt)
 
     # ---------------- finalize cv with kB, T, V ----------------
