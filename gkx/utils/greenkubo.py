@@ -45,6 +45,7 @@ def get_kappa_interpolate(
     dataset,
     fc_file: Optional[Path] = None,
     dmx_file: Optional[Path] = None,
+    nq_max: int = 20,
 ):
 
     dataset[keys.heat_flux] /= 1000
@@ -115,6 +116,7 @@ def get_kappa_interpolate(
         dmx=dmx,
         interpolate=True,
         quasi_harmonic_greenkubo=True,
+        nq_max=nq_max,
     )
 
     return ds_gk
@@ -124,6 +126,7 @@ def get_gk_dataset(
     dmx: DynamicalMatrix = None,
     interpolate: bool = False,
     quasi_harmonic_greenkubo: bool = False,
+    nq_max: int = 20,
     window_factor: int = defaults.window_factor,
     filter_prominence: float = defaults.filter_prominence,
     discard: int = 0,
@@ -260,6 +263,7 @@ def get_gk_dataset(
             dataset,
             dmx=dmx,
             interpolate=interpolate,
+            nq_max=nq_max,
             quasi_harmonic_greenkubo=quasi_harmonic_greenkubo,
         )
 
@@ -468,6 +472,7 @@ def get_gk_interpolate(
     dmx: DynamicalMatrix = None,
     interpolate: bool = False,
     quasi_harmonic_greenkubo: bool = False,
+    nq_max: int = 20,
 ):
     timer = Timer("Set up DynamicalMatrix")
 
@@ -533,6 +538,7 @@ def get_gk_interpolate(
             dmx=dmx,
             lifetimes=tau_symmetrized_sq,
             cv=cv,
+            nq_max=nq_max,
             quasi_harmonic_greenkubo=quasi_harmonic_greenkubo
         )
         data.update(results)

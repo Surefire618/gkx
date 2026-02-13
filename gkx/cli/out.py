@@ -24,9 +24,10 @@ def out():
 )
 @click.option("--offset", default=None, type=int, help="start from offset")
 @click.option("--interpolate", is_flag=True, help="interpolate to dense grid")
+@click.option("--maxnq", default=20, type=int, help="interpolate max q density")
 @click.option("--spacing", default=None, type=int, help="use only every nth step")
 @click.option("--freq", default=1.0, type=float, help="lowest characteristic frequency")
-def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolate, spacing, freq):
+def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolate, maxnq, spacing, freq):
     """perform greenkubo analysis for heat flux dataset in FILE"""
     from stepson import comms
     from stepson.green_kubo import get_kappa_dataset
@@ -57,6 +58,9 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
 
     if interpolate:
         outfile = outfile.parent / f"{outfile.stem}.interpolate.nc"
+
+    if maxnq != 20:
+        outfile = outfile.parent / f"{outfile.stem}.nq_{maxnq}.nc"
 
     if outfile.is_file():
         comms.warn(f"{outfile} exists, skipping")
@@ -91,6 +95,7 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
             dataset,
             fc_file,
             dmx_file,
+            nq_max=maxnq,
         )
     else:
         ds_gk = get_kappa_dataset(
