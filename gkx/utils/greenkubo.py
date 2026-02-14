@@ -45,6 +45,7 @@ def get_kappa_interpolate(
     dataset,
     fc_file: Optional[Path] = None,
     dmx_file: Optional[Path] = None,
+    interpolate: bool = False,
     nq_max: int = 20,
 ):
 
@@ -61,7 +62,7 @@ def get_kappa_interpolate(
     displacements = find_mic(displacements.reshape(-1, 3), cell)[0]
     displacements = displacements.reshape(*shape)
 
-    volumes = np.ones(shape[0]) * dataset.volume
+    volumes = np.ones(shape[0]) * dataset.volume.data
 
     dataset.update({
         keys.displacements: (dims.time_atom_vec, displacements),
@@ -111,10 +112,11 @@ def get_kappa_interpolate(
         map_s2p = np.asarray(dmx.I2iL_map[:, 0])
         dataset.attrs.update({keys.map_supercell_to_primitive: map_s2p})
 
+
     ds_gk = get_gk_dataset(
         dataset,
         dmx=dmx,
-        interpolate=True,
+        interpolate=interpolate,
         quasi_harmonic_greenkubo=True,
         nq_max=nq_max,
     )
@@ -258,6 +260,35 @@ def get_gk_dataset(
 
     # 7. add properties derived from harmonic model
     if dmx is not None:
+
+        msg = "Set up Anharmonicity"
+        timer = Timer(msg)
+        disp = dataset.displacements.data
+        (_Nt, _Na, _a) = disp.shape
+
+        forces = dataset.forces.data
+        # remapped FC [3 * Na, 3 * Na]
+        f_ha = disp.reshape((_Nt,_Na*_a)) @ dmx.remapped
+        forces_ha = -f_ha.reshape((_Nt,_Na,_a))
+
+        rmse = (forces - forces_ha).std(axis=(1, 2))
+        std = forces.std(axis=(1, 2))
+        sigma_per_sample = rmse / std
+
+        rmse = (forces - forces_ha).std()
+        std = forces.std()
+        sigma = rmse / std
+
+        data.update({
+            keys.sigma_per_sample: (dims.time, sigma_per_sample),
+        })
+
+        attrs.update({
+            keys.sigma: (dims.time, sigma),
+        })
+
+        timer(msg)
+
 
         data_ha = get_gk_interpolate(
             dataset,

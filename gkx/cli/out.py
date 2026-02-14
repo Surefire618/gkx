@@ -95,6 +95,7 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
             dataset,
             fc_file,
             dmx_file,
+            interpolate,
             nq_max=maxnq,
         )
     else:
