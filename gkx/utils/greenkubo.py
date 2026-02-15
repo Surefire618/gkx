@@ -283,7 +283,7 @@ def get_gk_dataset(
             keys.sigma_per_sample: (dims.time, sigma_per_sample),
         })
 
-        attrs.update({keys.sigma: sigma})
+        attrs.update({keys.sigma: float(sigma)})
 
         timer(msg)
 
