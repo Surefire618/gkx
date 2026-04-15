@@ -90,13 +90,14 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
         dataset = dataset.isel(time=slice(0, len(dataset.time), spacing))
 
     if fc_file is not None or dmx_file is not None and interpolate:
-        from gkx.utils.greenkubo import get_kappa_interpolate
+        from gkmx import get_kappa_interpolate
         ds_gk = get_kappa_interpolate(
             dataset,
             fc_file,
             dmx_file,
             interpolate,
             nq_max=maxnq,
+            backend="jax",
         )
     else:
         ds_gk = get_kappa_dataset(

@@ -10,8 +10,8 @@ def chunk_to_dataset(
     from stepson.trajectory import add_property
     from stepson.green_kubo.heat_flux import get_prefactor
 
-    from vibes.helpers.converters import atoms2json
-    from vibes import keys
+    from gkmx.io import atoms2json
+    from gkmx import _constants as keys
 
     if supercell_atoms is not None:
         reference_atoms = supercell_atoms
@@ -77,7 +77,7 @@ def data_to_array(key, data, time, reference_atoms, length):
 
 
 def guess_dimensions(data, n_atoms, length):
-    from vibes import dimensions
+    from gkmx import _constants as dimensions
 
     shape = data.shape
     if shape == (length, 3):
@@ -93,7 +93,7 @@ def guess_dimensions(data, n_atoms, length):
 
 
 def guess_key(key):
-    from vibes import keys
+    from gkmx import _constants as keys
 
     if key == "energy":
         return keys.energy_potential

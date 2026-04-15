@@ -7,8 +7,6 @@ import xarray as xr
 from pathlib import Path
 
 from ase.units import fs
-from vibes import keys, dimensions
-
 from glp.instantiate import get_dynamics
 from glp.dynamics import atoms_to_input
 
