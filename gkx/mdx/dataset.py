@@ -7,9 +7,7 @@ from .utils import get_length
 def chunk_to_dataset(
     chunk, start_idx, dt, initial_atoms, supercell_atoms=None, primitive_atoms=None
 ):
-    from stepson.trajectory import add_property
-    from stepson.green_kubo.heat_flux import get_prefactor
-
+    from gkmx import add_property, gk_prefactor
     from gkmx.io import atoms2json
     from gkmx import _constants as keys
 
@@ -53,7 +51,7 @@ def chunk_to_dataset(
 
     add_property(data, keys.temperature)
 
-    attrs["prefactor"] = get_prefactor(attrs[keys.volume], data.temperature.mean().data)
+    attrs["prefactor"] = gk_prefactor(attrs[keys.volume], float(data.temperature.mean().data))
 
     data.attrs = attrs
 

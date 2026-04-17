@@ -26,12 +26,15 @@ def out():
 @click.option("--interpolate", is_flag=True, help="interpolate to dense grid")
 @click.option("--maxnq", default=20, type=int, help="interpolate max q density")
 @click.option("--spacing", default=None, type=int, help="use only every nth step")
-@click.option("--freq", default=1.0, type=float, help="lowest characteristic frequency")
+@click.option(
+    "--freq", default=None, type=float,
+    help="filter-window frequency in THz; bypasses VDOS auto-detection",
+)
 def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolate, maxnq, spacing, freq):
     """perform greenkubo analysis for heat flux dataset in FILE"""
-    from stepson import comms
-    from stepson.green_kubo import get_kappa_dataset
-    from stepson.utils import open_dataset
+    from gkx import comms
+    from gkmx import open_dataset
+    from gkmx import get_kappa_interpolate
 
     reporter = comms.reporter()
     reporter.start(f"working on {file}")
@@ -89,23 +92,15 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
         comms.talk(f"using spacing {spacing}")
         dataset = dataset.isel(time=slice(0, len(dataset.time), spacing))
 
-    if fc_file is not None or dmx_file is not None and interpolate:
-        from gkmx import get_kappa_interpolate
-        ds_gk = get_kappa_interpolate(
-            dataset,
-            fc_file,
-            dmx_file,
-            interpolate,
-            nq_max=maxnq,
-            backend="jax",
-        )
-    else:
-        ds_gk = get_kappa_dataset(
-            dataset,
-            window_factor=1.0,
-            aux=False,
-            freq=freq,
-        )
+    ds_gk = get_kappa_interpolate(
+        dataset,
+        fc_file,
+        dmx_file,
+        interpolate,
+        nq_max=maxnq,
+        backend="jax",
+        freq=freq,
+    )
 
     reporter.step(f"write to {outfile}")
 

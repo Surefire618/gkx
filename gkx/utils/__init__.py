@@ -1,4 +1,4 @@
-from stepson.trajectory import Trajectory
+from gkmx import Trajectory
 
 
 def open_trajectory(folder):
