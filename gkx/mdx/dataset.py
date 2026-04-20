@@ -9,7 +9,7 @@ def chunk_to_dataset(
 ):
     from gkmx import add_property, gk_prefactor
     from gkmx.io import atoms2json
-    from gkmx import _constants as keys
+    from gkmx import keys
 
     if supercell_atoms is not None:
         reference_atoms = supercell_atoms
@@ -91,7 +91,7 @@ def guess_dimensions(data, n_atoms, length):
 
 
 def guess_key(key):
-    from gkmx import _constants as keys
+    from gkmx import keys
 
     if key == "energy":
         return keys.energy_potential

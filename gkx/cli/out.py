@@ -34,7 +34,7 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
     """perform greenkubo analysis for heat flux dataset in FILE"""
     from gkx import comms
     from gkmx import open_dataset
-    from gkmx import get_kappa_interpolate
+    from gkmx import get_kappa
 
     reporter = comms.reporter()
     reporter.start(f"working on {file}")
@@ -92,7 +92,7 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
         comms.talk(f"using spacing {spacing}")
         dataset = dataset.isel(time=slice(0, len(dataset.time), spacing))
 
-    ds_gk = get_kappa_interpolate(
+    ds_gk = get_kappa(
         dataset,
         fc_file,
         dmx_file,
