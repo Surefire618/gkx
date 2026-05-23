@@ -94,12 +94,13 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
 
     ds_gk = get_kappa(
         dataset,
-        fc_file,
-        dmx_file,
-        interpolate,
+        fc_file=fc_file,
+        dmx_file=dmx_file,
+        interpolate=interpolate,
         nq_max=maxnq,
         backend="jax",
         freq=freq,
+        max_mem_gb="auto",
     )
 
     reporter.step(f"write to {outfile}")

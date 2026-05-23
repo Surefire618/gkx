@@ -7,9 +7,9 @@ from .utils import get_length
 def chunk_to_dataset(
     chunk, start_idx, dt, initial_atoms, supercell_atoms=None, primitive_atoms=None
 ):
-    from gkmx import add_property, gk_prefactor
+    from gkmx import gk_prefactor, keys
     from gkmx.io import atoms2json
-    from gkmx import keys
+    from gkmx.trajectory import add_property
 
     if supercell_atoms is not None:
         reference_atoms = supercell_atoms
@@ -75,17 +75,17 @@ def data_to_array(key, data, time, reference_atoms, length):
 
 
 def guess_dimensions(data, n_atoms, length):
-    from gkmx import _constants as dimensions
+    from gkmx import keys
 
     shape = data.shape
     if shape == (length, 3):
-        return dimensions.time_vec
+        return keys.time_vec
     elif shape == (length,):
-        return dimensions.time
+        return keys.dim_time
     elif shape == (length, 3, 3):
-        return dimensions.time_tensor
+        return keys.time_tensor
     elif shape == (length, n_atoms, 3):
-        return dimensions.time_atom_vec
+        return keys.time_atom_vec
     else:
         raise ValueError(f"unknown shape {shape}")
 
