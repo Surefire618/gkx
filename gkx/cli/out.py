@@ -105,7 +105,9 @@ def gk(file, fc_file, dmx_file, outfile, outfolder, maxsteps, offset, interpolat
 
     reporter.step(f"write to {outfile}")
 
-    ds_gk.to_netcdf(outfile)
+    # h5netcdf + invalid_netcdf so complex v_qssa_cartesian round-trips
+    # (netCDF4 engine rejects complex dtypes without auto_complex=True).
+    ds_gk.to_netcdf(outfile, engine="h5netcdf", invalid_netcdf=True)
 
     reporter.done()
 
